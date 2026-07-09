@@ -1,0 +1,8 @@
+{
+  "name": "Shop Requirement Filler",
+  "description": "Adds buttons to the shop for adding required item costs to your bank.",
+  "version": "0.1.0",
+  "setup": "setup.mjs",
+  "load": [],
+  "resources": []
+}
