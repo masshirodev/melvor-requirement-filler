@@ -2,9 +2,11 @@
 
 Melvor Idle mod with two features:
 
-1. **Shop cost filler** — adds an `Add items` button to shop purchase/upgrade rows.
-   Clicking it tops up the missing **item and currency** costs of that purchase in
-   your bank so it becomes affordable.
+1. **Cost filler** — adds an `Add items` button to shop purchase/upgrade rows and to
+   Agility obstacle/pillar build cards. Clicking it tops up the missing **item and
+   currency** costs of that purchase or build in your bank so it becomes affordable.
+   Agility build costs are read through `getObstacleBuildCosts` / `getPillarBuildCosts`,
+   so cost-reduction modifiers are respected.
 2. **Item Adder** — a settings page with a searchable, category-filterable grid of
    every item (and currency) in the game. Select any number of them, set a
    quantity, and add them straight to your bank.

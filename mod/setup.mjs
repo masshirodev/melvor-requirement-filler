@@ -10,13 +10,23 @@
 //   ShopPurchase.costs.items -> [{ item, quantity }]
 //   game.bank.getQty(item), game.bank.addItem(item, qty, ...)
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 const MARK = "shop-req-filler";
 const BUTTON_CLASS = `${MARK}-btn`;
 const PATCH_FLAG = `__${MARK}_patched`;
 const GUARD_FLAG = `__${MARK}_guard`;
 const OBSERVER_FLAG = `__${MARK}_observer`;
 const PURCHASE_KEY = Symbol(`${MARK}-purchase`);
+// A button stores a resolver returning normalized { items, currencies } costs,
+// so the click guard works for any cost source (shop, agility, ...).
+const COSTS_KEY = Symbol(`${MARK}-costs`);
+// The obstacle/pillar an agility selection card is currently showing.
+const TARGET_KEY = Symbol(`${MARK}-agility-target`);
+// The args setCosts was last called with, so we can replay it to re-render the
+// cost pills after topping up (the agility UI doesn't react to bank changes).
+const COST_ARGS_KEY = Symbol(`${MARK}-cost-args`);
+// Optional per-button hook run after a successful add; returns the button to flash.
+const REFRESH_KEY = Symbol(`${MARK}-refresh`);
 
 export function setup(ctx) {
   const log = (...args) => console.log(`[Shop Requirement Filler v${VERSION}]`, ...args);
@@ -27,6 +37,7 @@ export function setup(ctx) {
     injectStyles();
     installClickGuard();
     patchShopMenu(log);
+    patchAgilityMenus(log);
     refresh();
     log(
       `scope — globalThis.shopMenu:${typeof globalThis.shopMenu}` +
@@ -180,8 +191,13 @@ function ensureButton(shopItem) {
   button.type = "button";
   button.className = `btn btn-sm btn-success ${BUTTON_CLASS}`;
   button.textContent = "Add items";
-  button.title = "Add missing required item costs to your bank";
+  button.title = "Add missing required costs to your bank";
   button[PURCHASE_KEY] = purchase;
+  // Resolved at click time so costs stay correct as buy quantity / modifiers change.
+  button[COSTS_KEY] = () => ({
+    items: getItemCosts(purchase),
+    currencies: getCurrencyCosts(purchase),
+  });
   anchor.append(button);
 }
 
@@ -205,10 +221,38 @@ function installClickGuard() {
         event.stopImmediatePropagation();
 
         if (type !== "click") return;
-        const purchase = button[PURCHASE_KEY];
-        if (!purchase) return;
-        const { types } = addMissingItems(purchase);
-        flash(button, types > 0 ? `Added ${types} cost type(s)` : "Already have all");
+        const resolveCosts = button[COSTS_KEY];
+        if (typeof resolveCosts !== "function") return;
+
+        let types = 0;
+        try {
+          types = addMissingCosts(resolveCosts()).types;
+        } catch (err) {
+          console.error("[Shop Requirement Filler] failed to add costs", err);
+          flash(button, "Failed");
+          return;
+        }
+
+        if (types === 0) {
+          flash(button, "Already have all");
+          return;
+        }
+
+        // Some screens (agility) don't re-render on bank changes; give the button a
+        // chance to refresh its card, and flash whichever button survives that.
+        const refresh = button[REFRESH_KEY];
+        if (typeof refresh !== "function") {
+          flash(button, `Added ${types} cost type(s)`);
+          return;
+        }
+
+        let refreshed;
+        try {
+          refreshed = refresh();
+        } catch (err) {
+          console.error("[Shop Requirement Filler] cost re-render failed", err);
+        }
+        flash(refreshed ?? button, refreshed ? `Added ${types} cost type(s)` : "Added — reopen to refresh");
       },
       true, // capture phase — beats the card's own handler
     );
@@ -261,13 +305,38 @@ function getCurrencyCosts(purchase) {
   return Array.from(merged, ([currency, quantity]) => ({ currency, quantity }));
 }
 
-function addMissingItems(purchase) {
+// Melvor's `Costs` class (returned by e.g. game.agility.getObstacleBuildCosts)
+// exposes no public .items/.currencies — only these array getters. Normalizes it
+// into the same { items, currencies } shape the shop path produces.
+function normalizeCosts(costs) {
+  const items = typeof costs?.getItemQuantityArray === "function" ? costs.getItemQuantityArray() : [];
+  const currencies =
+    typeof costs?.getCurrencyQuantityArray === "function" ? costs.getCurrencyQuantityArray() : [];
+
+  return {
+    items: items
+      .map((entry) => ({ item: entry?.item, quantity: Math.floor(Number(entry?.quantity)) }))
+      .filter((entry) => entry.item && Number.isFinite(entry.quantity) && entry.quantity > 0),
+    currencies: currencies
+      .map((entry) => ({ currency: entry?.currency, quantity: Math.floor(Number(entry?.quantity)) }))
+      .filter(
+        (entry) =>
+          entry.currency &&
+          typeof entry.currency.add === "function" &&
+          Number.isFinite(entry.quantity) &&
+          entry.quantity > 0,
+      ),
+  };
+}
+
+// Tops the bank/currencies up to cover a normalized { items, currencies } cost.
+function addMissingCosts(costs) {
   const bank = getGame()?.bank;
-  if (!bank) return { added: 0, types: 0 };
+  if (!bank || !costs) return { added: 0, types: 0 };
 
   let added = 0;
   let types = 0;
-  for (const { item, quantity } of getItemCosts(purchase)) {
+  for (const { item, quantity } of costs.items ?? []) {
     const owned = Number(bank.getQty(item)) || 0;
     const missing = Math.max(0, quantity - owned);
     if (missing === 0) continue;
@@ -278,7 +347,7 @@ function addMissingItems(purchase) {
     types += 1;
   }
 
-  for (const { currency, quantity } of getCurrencyCosts(purchase)) {
+  for (const { currency, quantity } of costs.currencies ?? []) {
     const owned = Number(currency.amount) || 0;
     const missing = Math.max(0, quantity - owned);
     if (missing === 0) continue;
@@ -289,6 +358,96 @@ function addMissingItems(purchase) {
   }
 
   return { added, types };
+}
+
+// --- Agility obstacles -------------------------------------------------------
+
+// The selection cards (<agility-obstacle-selection>) never store their obstacle —
+// it only arrives as an argument to setObstacle/setPillar — so patch those to stash
+// it, then inject the button into the card's `costContainer`. setCosts is patched
+// too: it rebuilds costContainer's children and would otherwise wipe our button on
+// every re-render.
+function patchAgilityMenus(log) {
+  const proto = customElements.get("agility-obstacle-selection")?.prototype;
+  if (!proto) {
+    log("agility-obstacle-selection is not registered; skipping agility buttons.");
+    return;
+  }
+
+  patchAfter(proto, "setObstacle", function (obstacle) {
+    this[TARGET_KEY] = { target: obstacle, kind: "obstacle" };
+    ensureAgilityButton(this);
+  });
+  patchAfter(proto, "setPillar", function (pillar) {
+    this[TARGET_KEY] = { target: pillar, kind: "pillar" };
+    ensureAgilityButton(this);
+  });
+  patchAfter(proto, "setCosts", function (...args) {
+    this[COST_ARGS_KEY] = args; // remember them so we can replay this render
+    ensureAgilityButton(this);
+  });
+}
+
+// Wraps proto[name] so `after` runs against the instance once the original returns.
+function patchAfter(proto, name, after) {
+  const original = proto[name];
+  if (typeof original !== "function" || original[PATCH_FLAG]) return;
+
+  proto[name] = function patched(...args) {
+    const result = original.apply(this, args);
+    try {
+      after.apply(this, args);
+    } catch (err) {
+      console.error(`[Shop Requirement Filler] agility ${name} hook failed`, err);
+    }
+    return result;
+  };
+  proto[name][PATCH_FLAG] = true;
+}
+
+function ensureAgilityButton(element) {
+  const entry = element?.[TARGET_KEY];
+  const anchor = element?.costContainer;
+  if (!entry?.target || !anchor) return;
+  if (anchor.querySelector(`.${BUTTON_CLASS}`)) return;
+
+  const resolveCosts = () => getAgilityCosts(entry);
+  const costs = resolveCosts();
+  if (costs.items.length === 0 && costs.currencies.length === 0) return; // free to build
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `btn btn-sm btn-success ${BUTTON_CLASS}`;
+  button.textContent = "Add items";
+  button.title = "Add missing build costs to your bank";
+  button[COSTS_KEY] = resolveCosts;
+
+  // The agility screen doesn't react to bank changes, so the cost pills stay red
+  // until it's reopened. Replaying setCosts with the args it was last rendered
+  // with rebuilds them against the now-topped-up bank. Our setCosts patch re-adds
+  // the button afterwards, so we hand the fresh one back to be flashed.
+  button[REFRESH_KEY] = () => {
+    const args = element[COST_ARGS_KEY];
+    if (!args) return undefined;
+    element.setCosts(...args);
+    return anchor.querySelector(`.${BUTTON_CLASS}`) ?? undefined;
+  };
+
+  anchor.append(button);
+}
+
+// Build costs are modifier-reduced (the cards show "Cost Reduction: 30% / Items 45%"),
+// so they must come from the skill — the obstacle's own itemCosts/currencyCosts are
+// the pre-reduction base values and would add the wrong amounts.
+function getAgilityCosts(entry) {
+  const agility = getGame()?.agility;
+  if (!agility || !entry?.target) return { items: [], currencies: [] };
+
+  const costs =
+    entry.kind === "pillar"
+      ? agility.getPillarBuildCosts(entry.target)
+      : agility.getObstacleBuildCosts(entry.target);
+  return normalizeCosts(costs);
 }
 
 // --- Item Adder settings + modal ---------------------------------------------

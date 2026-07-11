@@ -1,7 +1,7 @@
 {
   "name": "Shop Requirement Filler",
-  "description": "Adds shop buttons that top up the item and currency costs of a purchase, plus an Item Adder settings page for spawning any item or currency into your bank via a searchable, category-filtered icon grid.",
-  "version": "0.2.0",
+  "description": "Adds buttons to shop purchases and Agility obstacles that top up their item and currency costs, plus an Item Adder settings page for spawning any item or currency into your bank via a searchable, category-filtered icon grid.",
+  "version": "0.3.0",
   "setup": "setup.mjs",
   "load": [],
   "resources": []
