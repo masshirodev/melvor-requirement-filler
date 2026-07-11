@@ -1,7 +1,7 @@
 {
   "name": "Shop Requirement Filler",
-  "description": "Adds buttons to the shop for adding required item costs to your bank.",
-  "version": "0.1.9",
+  "description": "Adds shop buttons that top up the item and currency costs of a purchase, plus an Item Adder settings page for spawning any item or currency into your bank via a searchable, category-filtered icon grid.",
+  "version": "0.2.0",
   "setup": "setup.mjs",
   "load": [],
   "resources": []

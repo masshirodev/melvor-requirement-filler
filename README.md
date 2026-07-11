@@ -1,21 +1,36 @@
 # Shop Requirement Filler
 
-Melvor Idle mod that adds an `Add items` button to shop purchase or upgrade rows. Clicking the button adds the missing item costs to the player's bank so the purchase can be bought.
+Melvor Idle mod with two features:
+
+1. **Shop cost filler** — adds an `Add items` button to shop purchase/upgrade rows.
+   Clicking it tops up the missing **item and currency** costs of that purchase in
+   your bank so it becomes affordable.
+2. **Item Adder** — a settings page with a searchable, category-filterable grid of
+   every item (and currency) in the game. Select any number of them, set a
+   quantity, and add them straight to your bank.
 
 ## Install
 
-1. Create a local mod in the Melvor Mod Manager.
-2. Point it at this folder.
-3. Enable the mod and load a character.
+1. Create a local mod in the Melvor Mod Manager and point it at the `mod/` folder
+   (or upload `add-shop-items.zip` to mod.io).
+2. Enable the mod and load a character.
 
-The mod only fills item costs. It does not add GP, Slayer Coins, Raid Coins, skill levels, completion requirements, or other non-item requirements.
+## Using the Item Adder
+
+1. Open the Mod Manager and go to this mod's **Settings**.
+2. Click **Open Item Adder**. The settings popup closes and a full-screen grid
+   opens.
+3. Search by name and/or filter by category, set the quantity, click items to
+   select them (green highlight), then click **Add**. **Clear** deselects
+   everything. A toast confirms what was added.
+
+Large batches are added in throttled chunks so the game stays responsive.
 
 ## Notes
 
-Melvor's shop UI has changed across versions, so the mod uses several runtime probes:
-
-- patches common shop render/update methods when present;
-- watches the shop DOM for newly rendered rows;
-- reads common shop purchase cost shapes such as `costs.items`, `itemCosts`, and `{ item, quantity }`.
-
-If the button does not appear for a specific shop row, open the browser console and look for `Shop Requirement Filler` messages.
+- The shop filler only fills item and currency costs. It does not add skill levels,
+  completion requirements, or other non-cost requirements.
+- Globals (`game`, `shopMenu`, `Swal`, `formatNumber`) are reached by bare name with
+  `typeof` guards, since Melvor scopes them lexically rather than on `globalThis`.
+- If a shop button doesn't appear, open the browser console and look for
+  `Shop Requirement Filler` messages.
