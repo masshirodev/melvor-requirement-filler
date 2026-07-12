@@ -13,15 +13,19 @@
   <li><strong>Cartography</strong> &mdash; paper, dig site map creation, map upgrades and refinement slots.</li>
   <li><strong>Township</strong> &mdash; town resources to build or upgrade N times (with a <strong>Max</strong> option that funds every build remaining until the next upgrade), plus repairs.</li>
   <li><strong>Township tasks</strong> &mdash; a <strong>Claim</strong> button that completes the task and pays out the rewards. Works on goals you can't buy your way out of, like <em>"Defeat 50 Skeletons"</em>.</li>
+  <li><strong>Construction</strong> (the third-party skill by rielk, if you have it) &mdash; fills the whole <strong>Costs Remaining</strong> box next to <strong>Build</strong>, so the selected fixture's current tier can be finished outright. Its Materials tab gets the usual crafting dropdown.</li>
+  <li><strong>Item upgrades</strong> &mdash; the bank's <strong>Upgrade Item</strong> modal gets a dropdown that adds the materials for the upgrade N times, and the Upgrade button reappears without closing the modal.</li>
 </ul>
 
 <p>Costs are read from the game's own modifier-aware getters, so <strong>cost-reduction bonuses are respected</strong> &mdash; you get the reduced amount actually shown on the card, never the base cost.</p>
 
 <p>Every dropdown has x1 / x10 / x100 / x1000 presets and a custom amount field.</p>
 
+<p>Heads up: a big add can <strong>freeze the game for a few seconds</strong> &mdash; every bank write wakes up every listener in the game and in each other mod you have loaded. Every Add button's tooltip warns you before you click.</p>
+
 <h3>Item Adder</h3>
 
-<p>A settings page with a searchable, category-filtered grid of <strong>every item and currency in the game</strong>. Select as many as you like, set a quantity, and add them straight to your bank. Large batches are added in throttled chunks, so the game doesn't freeze.</p>
+<p>A settings page with a searchable, category-filtered grid of <strong>every item and currency in the game</strong>. Page through a category or search by name, click to select &mdash; or hit <strong>Select all</strong> to take the whole page &mdash; set a quantity, and add them straight to your bank. Your selection is kept as you page, and large batches are added in throttled chunks so the game doesn't freeze.</p>
 
 <h3>Usage</h3>
 

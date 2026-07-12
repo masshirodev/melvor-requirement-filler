@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.12.1 — "this might lag" tooltips
+
+- Every **Add** button now says so on hover: *"The game may freeze for a few seconds while
+  the items are added."*
+- Spreading the adds across frames was tried and **reverted**: a bank write wakes every
+  listener in the game and in every other mod loaded, and dribbling those out over a couple
+  of seconds felt worse to use than one honest pause. The freeze is inherent, so the mod
+  warns about it instead of hiding it.
+
+## 0.12.0 — Item Adder: pagination
+
+- The grid is now **paged** (600 cells per page, `‹ Prev` / `Next ›` beneath it) instead of
+  truncated at 600 with "refine your search to see more". Every item in the game is now
+  reachable by browsing — previously, anything past the 600th match in a category simply
+  could not be seen without narrowing the search until it happened to surface.
+- The hint line reads `Showing 601–1,200 of 3,412` rather than a cut-off warning.
+- `Select all` takes the **current page**, and selection survives paging, so
+  Select all → Next → Select all accumulates across pages.
+
+## 0.11.0 — Item Adder: Select all
+
+- **`Select all`** in the Item Adder selects every entry currently shown in the grid, so a
+  search or category can be added in one go. It selects what's *on screen* — the grid caps
+  itself at 600 cells, and with "All categories" that cap is doing a lot of work, so
+  selecting every match would have quietly picked ~3,400 entries you never saw. The hint
+  line still tells you when matches were cut off.
+
+## 0.10.0 — Item upgrades
+
+- The bank's **Upgrade Item** modal gets an `Add items ▾` dropdown in its cost row, adding
+  the materials for **N** upgrades. Costs come from the `ItemUpgrade`'s own
+  `itemCosts`/`currencyCosts` — there's no modifier-aware getter for these, and
+  `bank.getMaxUpgradeQuantity()` reads exactly those arrays, so they are what the game
+  charges.
+- After adding, the modal replays `setUpgrade()` with the arguments it was last given.
+  The game hides the Upgrade buttons when you can't afford the cost and never re-renders
+  the modal on a bank change, so without this you'd have topped up and still have no way
+  to upgrade without closing and reopening it.
+
+## 0.9.0 — Construction
+
+- **Construction** (the third-party `rielkConstruction` skill) now gets an `Add items`
+  button next to **Build** on every room panel. It tops up the card's whole
+  **"Costs Remaining"** box, so the fixture's current tier can be built out in full.
+  Costs come from `fixture.getTotalRemainingCost()` — the same `UIcost` the card renders,
+  so cost modifiers are respected — and the fixture is read at click time, since a room
+  panel is reused for every fixture in that room.
+- Construction's refresh repaints the panel's cost icons directly instead of going through
+  `safeRender()`. The generic helper flips *every* boolean in a skill's render queue, and
+  Construction's `renderfixtureItemUpdates` reaches `activeBuildRecipe` — a getter that
+  throws unless a build is running. It threw before the flag was cleared, so the game
+  crashed on every frame after a top-up.
+- Artisan re-injection now also covers **subclassed** crafting menus. Construction's
+  Materials tab is a `<cons-artisan-menu>`, not the base `<artisan-menu>`, so its dropdown
+  disappeared whenever it re-rendered.
+
 ## 0.8.x — Township, tasks and refresh fixes
 
 - **Township tasks now work.** `completeTask()` gates on `goals.checkIfMet()`, a method

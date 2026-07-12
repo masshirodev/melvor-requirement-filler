@@ -22,6 +22,8 @@ that gives you exactly what's missing.
 | **Cartography** | `Add items ▾` / `Add` | Paper N times, map creation, map upgrades, refinement slots |
 | **Township** | `Add items ▾` (with `Max`) | Town resources to build/upgrade N times, or repair |
 | **Township tasks** | `Claim` | Force-completes a task and pays out its rewards |
+| **Construction** (mod skill) | `Add items` | Everything still needed to finish the selected fixture's tier |
+| **Item upgrades** (bank) | `Add items ▾` | Materials for the "Upgrade Item" modal's upgrade, **N times** |
 
 Notes:
 
@@ -30,9 +32,17 @@ Notes:
   you get the reduced amount actually shown on the card, not the base cost.
 - The dropdowns have `x1 / x10 / x100 / x1000` presets plus a custom amount. Township's
   also has a **`Max (N)`** option that funds every build remaining until the next upgrade.
+- **Adding can briefly freeze the game**, and every Add button's tooltip says so. Each
+  bank write wakes every bank listener in the game and in every other mod you have loaded,
+  so a big add costs a beat. Spreading the writes across frames was tried and felt worse
+  than one short pause, so the mod just does it and warns you.
 - **Township tasks** use `Claim` rather than adding items, because goals like
   *"Defeat 50 Skeletons"* can't be satisfied from the bank. It marks every goal met,
   awards the rewards, and completes the task.
+- **Construction** is a third-party skill (`rielkConstruction`); its button only appears if
+  you have that mod. It tops up the whole **"Costs Remaining"** box — i.e. everything left
+  to finish the fixture's current tier, not one build tick. Its *Materials* tab gets the
+  usual crafting dropdown.
 
 ### Item Adder
 
@@ -41,7 +51,7 @@ in the game. Select any number of them, set a quantity, and add them straight to
 
 ## Install
 
-**From a modfile:** upload/install `add-shop-items.zip` (contains `manifest.json` +
+**From a modfile:** upload/install `add-shop-items-v<version>.zip` (contains `manifest.json` +
 `setup.mjs` at the archive root).
 
 **As a local mod:** create a local mod in the Melvor Mod Manager and point it at the
@@ -54,8 +64,13 @@ Then enable the mod and load a character.
 1. Open the Mod Manager and go to this mod's **Settings**.
 2. Click **Open Item Adder**. The settings popup closes and a full-screen grid opens.
 3. Search by name and/or filter by category, set the quantity, click items to select them
-   (green highlight), then click **Add**. **Clear** deselects everything, and a toast
-   confirms what was added.
+   (green highlight), then click **Add**. **Select all** takes everything on the current
+   page, **Clear** deselects everything, and a toast confirms what was added.
+
+The grid is **paged** at 600 cells — use `‹ Prev` / `Next ›` under it to browse a whole
+category. Selection is kept as you page, so you can Select all, hit Next, Select all again,
+and then Add the lot. **Select all** deliberately takes only the page you're looking at,
+never every match, so you can't accidentally dump thousands of unseen items into your bank.
 
 Large batches are added in throttled chunks so the game stays responsive.
 

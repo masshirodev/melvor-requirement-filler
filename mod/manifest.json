@@ -1,7 +1,7 @@
 {
   "name": "Shop Requirement Filler",
   "description": "Adds buttons that top up costs across the game: shop purchases, Agility obstacles, Astrology stardust upgrades (with Add max), and a quantity dropdown on crafting-style skills that adds the materials to craft a recipe N times. Also includes an Item Adder settings page for spawning any item or currency into your bank via a searchable, category-filtered icon grid.",
-  "version": "0.8.3",
+  "version": "0.12.1",
   "setup": "setup.mjs",
   "load": [],
   "resources": []

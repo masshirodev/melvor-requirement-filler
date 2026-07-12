@@ -10,7 +10,7 @@
 //   ShopPurchase.costs.items -> [{ item, quantity }]
 //   game.bank.getQty(item), game.bank.addItem(item, qty, ...)
 
-const VERSION = "0.8.3";
+const VERSION = "0.12.1";
 const MARK = "shop-req-filler";
 const BUTTON_CLASS = `${MARK}-btn`;
 const PATCH_FLAG = `__${MARK}_patched`;
@@ -52,6 +52,8 @@ export function setup(ctx) {
     patchFiremakingOilMenu(log);
     patchCartographyMenus(log);
     patchFarmingMenus(log);
+    patchItemUpgradeMenu(log);
+    patchConstructionMenus(log);
     patchTownshipMenus(log);
     patchTownshipTasks(log);
     sweepExistingMenus();
@@ -208,7 +210,7 @@ function ensureButton(shopItem) {
   button.type = "button";
   button.className = `btn btn-sm btn-success ${BUTTON_CLASS} ${UI_CLASS}`;
   button.textContent = "Add items";
-  button.title = "Add missing required costs to your bank";
+  button.title = withLagNote("Add missing required costs to your bank");
   button[PURCHASE_KEY] = purchase;
   // Resolved at click time so costs stay correct as buy quantity / modifiers change.
   button[COSTS_KEY] = () => ({
@@ -300,6 +302,13 @@ function handleTopUpClick(button) {
   }
   flash(refreshed ?? button, refreshed ? `Added ${types} cost type(s)` : "Added — reopen to refresh");
 }
+
+// Every bank write wakes up every bank listener in the game and in each other mod loaded,
+// so a big add stalls the game for a beat. That's inherent (spreading the adds across
+// frames was worse to use), so say so on the button rather than pretend otherwise.
+const LAG_NOTE = "The game may freeze for a few seconds while the items are added.";
+
+const withLagNote = (title) => `${title}\n${LAG_NOTE}`;
 
 function flash(button, text) {
   const original = button.textContent;
@@ -432,7 +441,8 @@ function addMissingCosts(costs) {
     if (missing === 0) continue;
 
     // addItem(item, quantity, logLost, found, ignoreSpace, notify)
-    bank.addItem(item, missing, false, false, true, true);
+    // notify:false — a toast per item type is its own source of stalling.
+    bank.addItem(item, missing, false, false, true, false);
     added += missing;
     types += 1;
   }
@@ -519,7 +529,7 @@ function ensureAgilityButton(element) {
   button.type = "button";
   button.className = `btn btn-sm btn-success ${BUTTON_CLASS} ${UI_CLASS}`;
   button.textContent = "Add items";
-  button.title = "Add missing build costs to your bank";
+  button.title = withLagNote("Add missing build costs to your bank");
   button[COSTS_KEY] = resolveCosts;
   button[ACTION_KEY] = () => handleTopUpClick(button);
 
@@ -593,7 +603,7 @@ function attachAmountButton(anchor, { title, resolveCosts, refresh, maxAmount })
 
   const { group, main } = createMenuButton({
     label: "Add items",
-    title,
+    title: withLagNote(title),
     buildMenu: (close) =>
       buildAmountMenu(
         {
@@ -639,7 +649,7 @@ function attachTopUpButton(anchor, { title, resolveCosts, refresh, label = "Add"
   button.type = "button";
   button.className = `btn btn-sm btn-success ${BUTTON_CLASS} ${UI_CLASS}`;
   button.textContent = label;
-  button.title = title;
+  button.title = withLagNote(title);
   button[COSTS_KEY] = resolveCosts;
   button[ACTION_KEY] = () => handleTopUpClick(button);
   if (refresh) {
@@ -1386,7 +1396,7 @@ function ensureAstrologyButton(row, constellation, modifier) {
 
   const { group, main } = createMenuButton({
     label: "Add",
-    title: "Add the stardust for this upgrade",
+    title: withLagNote("Add the stardust for this upgrade"),
     color: "btn-info",
     onClick: () => addAstrologyCost(constellation, modifier, 1, main),
     buildMenu: (close) =>
@@ -1485,16 +1495,21 @@ function patchArtisanMenus(log) {
     ensureArtisanButton(menu, skill);
   }
 
-  // Re-inject when the selected recipe changes and the box is re-rendered.
-  const proto = customElements.get("artisan-menu")?.prototype;
-  if (!proto) {
-    log("artisan-menu is not registered; skipping the crafting dropdown.");
-    return;
+  // Re-inject when the selected recipe changes and the box is re-rendered. Modded skills
+  // subclass the menu (Construction's is <cons-artisan-menu>), so patch the prototype of
+  // each menu we actually found as well as the base element — a subclass that overrides
+  // setIngredients would never reach the base patch.
+  const protos = new Set(Array.from(artisanSkillByMenu.keys(), (menu) => Object.getPrototypeOf(menu)));
+  const base = customElements.get("artisan-menu")?.prototype;
+  if (base) protos.add(base);
+  else log("artisan-menu is not registered; relying on the menus found on the skills.");
+
+  for (const proto of protos) {
+    patchAfter(proto, "setIngredients", function () {
+      const skill = artisanSkillByMenu.get(this);
+      if (skill) ensureArtisanButton(this, skill);
+    });
   }
-  patchAfter(proto, "setIngredients", function () {
-    const skill = artisanSkillByMenu.get(this);
-    if (skill) ensureArtisanButton(this, skill);
-  });
 }
 
 function isArtisanMenu(menu) {
@@ -1516,6 +1531,162 @@ function refreshArtisanMenu(menu, skill) {
     menu.updateQuantities(getGame());
   } catch (err) {
     console.warn("[Shop Requirement Filler] artisan quantity refresh failed", err);
+  }
+}
+
+// --- Bank item upgrades -------------------------------------------------------
+
+// The "Upgrade Item" modal is a singleton <item-upgrade-menu>, and setUpgrade(upgrade,
+// rootItem, bank, game) hands it everything it renders. The costs are plain arrays on the
+// ItemUpgrade — there's no modifier-aware getter here, and bank.getMaxUpgradeQuantity()
+// reads these same arrays, so they ARE what the game charges.
+function patchItemUpgradeMenu(log) {
+  const proto = customElements.get("item-upgrade-menu")?.prototype;
+  if (!proto) {
+    log("item-upgrade-menu is not registered; skipping the upgrade button.");
+    return;
+  }
+
+  patchAfter(proto, "setUpgrade", function (...args) {
+    this[TARGET_KEY] = args[0];
+    // Remember them: replaying this render is what brings the Upgrade button back.
+    this[COST_ARGS_KEY] = args;
+    ensureItemUpgradeButton(this);
+  });
+  patchAfter(proto, "setUpgradeCosts", function () {
+    ensureItemUpgradeButton(this);
+  });
+}
+
+function ensureItemUpgradeButton(menu) {
+  // Anchor to the row holding "Cost:", not to the cost spans — those are rebuilt wholesale.
+  const anchor = menu?.itemCosts?.parentElement ?? menu?.currencyCosts?.parentElement;
+  if (!menu?.[TARGET_KEY] || !anchor) return;
+
+  attachAmountButton(anchor, {
+    title: "Add the items to perform this upgrade N times",
+    // The modal is reused for every upgrade, so read it at click time.
+    resolveCosts: () => getItemUpgradeCosts(menu[TARGET_KEY]),
+    refresh: () => replayItemUpgrade(menu),
+  });
+}
+
+// itemCosts/currencyCosts are the same [{item|currency, quantity}] shape a ShopPurchase's
+// costs use, so hand them to the shop's normalizers rather than re-implementing the merge.
+function getItemUpgradeCosts(upgrade) {
+  if (!upgrade) return { items: [], currencies: [] };
+
+  const purchase = { costs: { items: upgrade.itemCosts, currencies: upgrade.currencyCosts } };
+  return { items: getItemCosts(purchase), currencies: getCurrencyCosts(purchase) };
+}
+
+// The modal hides its Upgrade buttons when you can't afford the cost, and nothing
+// re-renders it on a bank change — so after topping up you'd be staring at a modal with
+// no way to upgrade until you closed and reopened it. Replaying setUpgrade with the args
+// it was last given rebuilds the cost row AND the buttons (setUpgrade does both).
+function replayItemUpgrade(menu) {
+  const args = menu[COST_ARGS_KEY];
+  if (!args) return;
+  try {
+    menu.setUpgrade(...args);
+  } catch (err) {
+    console.warn("[Shop Requirement Filler] upgrade modal refresh failed", err);
+  }
+}
+
+// --- Construction (the rielkConstruction mod skill) ---------------------------
+
+// The house screen renders one <rielk-construction-room-panel> per room; the panel's
+// `selectedFixture` is the ConstructionFixture whose card is on show. Costs live on the
+// FIXTURE, not the skill:
+//   fixture.UIcost                -> what the "Costs Remaining" box lists
+//   fixture.getTotalRemainingCost -> that same thing as a Costs (modifier-adjusted:
+//                                    it's built from UIcost, which the skill recomputes
+//                                    through getCurrentBuildRecipeCosts)
+//   fixture.stepCost              -> the cost of ONE build tick (not what we want)
+// Topping up against the remaining cost funds the fixture's whole current tier, which is
+// what the card is asking for.
+const CONSTRUCTION_ID = "rielkConstruction:Construction";
+const CONSTRUCTION_PANEL = "rielk-construction-room-panel";
+
+// A mod skill, so there's no game.construction — go through the registry.
+function getConstruction() {
+  const skills = getGame()?.skills;
+  try {
+    const skill = skills?.getObjectByID?.(CONSTRUCTION_ID);
+    if (skill) return skill;
+  } catch {
+    /* not registered */
+  }
+  return skills?.allObjects?.find((skill) => skill.id === CONSTRUCTION_ID);
+}
+
+function patchConstructionMenus(log) {
+  const proto = customElements.get(CONSTRUCTION_PANEL)?.prototype;
+  if (!proto) {
+    log(`${CONSTRUCTION_PANEL} is not registered; skipping construction buttons.`);
+    return;
+  }
+
+  // selectFixture is what hands the panel its fixture; the update* methods repaint the
+  // cost icons (on selection and on every build tick), so re-inject from each of them.
+  for (const method of [
+    "selectFixture",
+    "selectFixtureUI",
+    "updateFixtureInfo",
+    "updateFixtureItemIcons",
+    "updateCurrentFixtureItemIcons",
+  ]) {
+    patchAfter(proto, method, function () {
+      ensureConstructionButton(this);
+    });
+  }
+
+  // The house is rendered before onInterfaceReady, so panels already showing a fixture
+  // would otherwise stay buttonless until you re-selected one.
+  document.querySelectorAll(CONSTRUCTION_PANEL).forEach(ensureConstructionButton);
+}
+
+function ensureConstructionButton(panel) {
+  const construction = getConstruction();
+  // Sit next to Build, in the row the button lives in — the cost boxes above are rebuilt
+  // wholesale by setItemsFromRecipe on every tick.
+  const anchor = panel?.startButton?.parentElement;
+  if (!construction || !anchor) return;
+  // No fixture selected yet (or it's maxed): nothing to price. Our selectFixture patch
+  // brings us back here the moment one is picked.
+  if (isEmptyCosts(getConstructionCosts(panel.selectedFixture))) return;
+
+  attachTopUpButton(anchor, {
+    label: "Add items",
+    title: "Add everything still needed to finish this build",
+    // Read the fixture at click time — a panel is reused for every fixture in its room.
+    resolveCosts: () => getConstructionCosts(panel.selectedFixture),
+    refresh: () => {
+      const fixture = panel.selectedFixture;
+      if (!fixture) return;
+      // Repaint the panel's own cost icons ("Costs Remaining" / "You Have:") — and ONLY
+      // those. Do not call safeRender() here: it flips every boolean in the skill's render
+      // queue, and `renderfixtureItemUpdates` leads to `activeBuildRecipe`, a getter that
+      // THROWS unless a build is currently running. It throws before the flag is cleared,
+      // so the game then crashes on every frame.
+      panel.updateCurrentFixtureItemIcons(construction, fixture);
+    },
+  });
+}
+
+// Everything still needed to finish the fixture's current tier. A maxed fixture has no
+// current recipe, and getTotalRemainingCost would throw reading UIcost off it.
+function getConstructionCosts(fixture) {
+  const empty = { items: [], currencies: [] };
+  if (!fixture || fixture.isMaxTier) return empty;
+
+  try {
+    if (!fixture.currentRecipe) return empty;
+    return normalizeCosts(fixture.getTotalRemainingCost());
+  } catch (err) {
+    console.warn("[Shop Requirement Filler] could not price a construction fixture", err);
+    return empty;
   }
 }
 
@@ -1723,18 +1894,22 @@ const ADDER = {
   category: `${MARK}-adder-category`,
   qty: `${MARK}-adder-qty`,
   add: `${MARK}-adder-add`,
+  selectAll: `${MARK}-adder-select-all`,
   clear: `${MARK}-adder-clear`,
   close: `${MARK}-adder-close`,
   grid: `${MARK}-adder-grid`,
   cell: `${MARK}-adder-cell`,
   hint: `${MARK}-adder-hint`,
+  pager: `${MARK}-adder-pager`,
   tip: `${MARK}-adder-tip`,
   toast: `${MARK}-adder-toast`,
   selected: `${MARK}-selected`,
 };
 
-// Cap on cells rendered at once so the unfiltered ~1600-item list stays snappy.
-const RENDER_CAP = 600;
+// Cells drawn per page. The full list is thousands of entries, and rendering it in one go
+// is what made the grid crawl — so it's paged rather than truncated: every entry is now
+// reachable by browsing, not just by searching.
+const PAGE_SIZE = 600;
 const CURRENCY_CATEGORY = "Currency";
 
 let overlayEl; // cached DOM, built lazily on first open
@@ -1824,6 +1999,13 @@ function buildOverlay() {
   add.type = "button";
   add.className = `btn btn-sm btn-success ${ADDER.add}`;
   add.textContent = "Add";
+  add.title = withLagNote("Add the selected items/currencies to your bank");
+
+  const selectAll = document.createElement("button");
+  selectAll.type = "button";
+  selectAll.className = `btn btn-sm btn-info ${ADDER.selectAll}`;
+  selectAll.textContent = "Select all";
+  selectAll.title = "Select every item currently shown in the grid";
 
   const clear = document.createElement("button");
   clear.type = "button";
@@ -1836,7 +2018,7 @@ function buildOverlay() {
   close.textContent = "Close";
   close.addEventListener("click", closeItemAdder);
 
-  bar.append(search, category, qtyWrap, add, clear, close);
+  bar.append(search, category, qtyWrap, add, selectAll, clear, close);
   panel.append(bar);
 
   // --- grid ---
@@ -1844,10 +2026,24 @@ function buildOverlay() {
   grid.className = ADDER.grid;
   panel.append(grid);
 
-  // Result count / "refine your search" line, below the scrollable grid.
+  // Result count line + page controls, below the scrollable grid.
   const hint = document.createElement("div");
   hint.className = ADDER.hint;
   panel.append(hint);
+
+  const pager = document.createElement("div");
+  pager.className = ADDER.pager;
+  const prev = document.createElement("button");
+  prev.type = "button";
+  prev.className = "btn btn-sm btn-secondary";
+  prev.textContent = "‹ Prev";
+  const pageLabel = document.createElement("span");
+  const next = document.createElement("button");
+  next.type = "button";
+  next.className = "btn btn-sm btn-secondary";
+  next.textContent = "Next ›";
+  pager.append(prev, pageLabel, next);
+  panel.append(pager);
 
   // Custom hover tooltip (native title is flaky over a dense icon grid).
   // Lives on the overlay so it can float above the scrollable grid.
@@ -1885,14 +2081,54 @@ function buildOverlay() {
     return Number.isFinite(value) && value > 0 ? value : 1;
   };
 
+  let page = 0;
+
+  const rerender = () => {
+    const filtered = filterEntries(entries, search.value, category.value);
+    const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+    // Clamp: narrowing the search while on page 9 would otherwise land on an empty grid.
+    page = Math.min(Math.max(0, page), pages - 1);
+
+    const start = page * PAGE_SIZE;
+    const shown = filtered.slice(start, start + PAGE_SIZE);
+    renderGrid(grid, shown, selected);
+
+    const selectedCount = selected.size ? ` · ${selected.size} selected` : "";
+    hint.textContent =
+      (filtered.length === 0
+        ? "No items match your search."
+        : `Showing ${formatQty(start + 1)}–${formatQty(start + shown.length)} of ${formatQty(filtered.length)}`) +
+      selectedCount;
+
+    pageLabel.textContent = `Page ${formatQty(page + 1)} / ${formatQty(pages)}`;
+    prev.disabled = page === 0;
+    next.disabled = page >= pages - 1;
+    pager.hidden = pages <= 1;
+    grid.scrollTop = 0;
+  };
+
+  // A new search/category means the old page number is meaningless — go back to the first.
+  const rerenderFromStart = () => {
+    page = 0;
+    rerender();
+  };
+
   let timer;
-  const rerender = () => renderGrid(grid, hint, entries, search.value, category.value, selected);
   const debounced = () => {
     clearTimeout(timer);
-    timer = setTimeout(rerender, 120);
+    timer = setTimeout(rerenderFromStart, 120);
   };
   search.addEventListener("input", debounced);
-  category.addEventListener("change", rerender);
+  category.addEventListener("change", rerenderFromStart);
+
+  prev.addEventListener("click", () => {
+    page -= 1;
+    rerender();
+  });
+  next.addEventListener("click", () => {
+    page += 1;
+    rerender();
+  });
 
   // Click toggles selection; the Add button commits the current quantity.
   grid.addEventListener("click", (event) => {
@@ -1949,6 +2185,20 @@ function buildOverlay() {
     rerender();
   });
 
+  // Selects the cells on THIS page, not every match — with "All categories" the latter
+  // would silently select thousands of entries you never saw. Selection survives paging
+  // (it's a Set of entries, not of cells), so "Select all → Next → Select all" accumulates.
+  selectAll.addEventListener("click", () => {
+    const shown = visibleEntries(entries, search.value, category.value, page);
+    if (shown.length === 0) {
+      flash(selectAll, "Nothing shown");
+      return;
+    }
+    for (const entry of shown) selected.add(entry);
+    rerender();
+    flash(selectAll, `Selected ${formatQty(shown.length)}`);
+  });
+
   clear.addEventListener("click", () => {
     if (selected.size === 0) {
       flash(clear, "Nothing selected");
@@ -1993,9 +2243,9 @@ function positionTip(tip, x, y) {
 function buildEntries() {
   const entries = [];
 
-  // Currencies FIRST: there are ~3,400 items and the grid only renders RENDER_CAP
-  // cells, so appending the 5 currencies at the end left them off the "All categories"
-  // view entirely — they were unreachable unless you filtered to Currency.
+  // Currencies FIRST so they land on page 1 of "All categories" rather than after ~3,400
+  // items. Paging makes them reachable either way now, but they're the entries you most
+  // often want, and hunting for the last page to find GP is silly.
   for (const currency of getAllCurrencies()) {
     if (!currency?.name) continue;
     entries.push({
@@ -2029,15 +2279,25 @@ function populateCategories(select, entries) {
   for (const name of categories) select.append(new Option(name, name));
 }
 
-function renderGrid(grid, hint, entries, query, categoryValue, selected) {
+// Every entry matching the current search + category.
+function filterEntries(entries, query, categoryValue) {
   const needle = String(query || "").trim().toLowerCase();
-  const filtered = entries.filter((entry) => {
+  return entries.filter((entry) => {
     if (categoryValue !== "All" && entry.category !== categoryValue) return false;
     if (needle && !entry.name.toLowerCase().includes(needle)) return false;
     return true;
   });
+}
 
-  const shown = filtered.slice(0, RENDER_CAP);
+// The entries actually ON SCREEN: one page of the matches. "Select all" goes through this
+// so it can't disagree with the grid about what's shown.
+function visibleEntries(entries, query, categoryValue, page) {
+  const start = page * PAGE_SIZE;
+  return filterEntries(entries, query, categoryValue).slice(start, start + PAGE_SIZE);
+}
+
+// Draws one page of cells. The caller owns paging and the hint/pager text.
+function renderGrid(grid, shown, selected) {
   const fragment = document.createDocumentFragment();
   for (const entry of shown) {
     const cell = document.createElement("button");
@@ -2059,14 +2319,6 @@ function renderGrid(grid, hint, entries, query, categoryValue, selected) {
   }
 
   grid.replaceChildren(fragment);
-
-  const selectedCount = selected?.size ? ` · ${selected.size} selected` : "";
-  hint.textContent =
-    (filtered.length === 0
-      ? "No items match your search."
-      : filtered.length > shown.length
-        ? `Showing ${shown.length} of ${filtered.length} — refine your search to see more.`
-        : `${filtered.length} result(s)`) + selectedCount;
 }
 
 // Formats large quantities using Melvor's formatNumber when reachable.
@@ -2307,6 +2559,17 @@ function injectStyles() {
       font-size: 12px;
       opacity: 0.7;
     }
+
+    .${ADDER.pager} {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 6px 4px 2px;
+      font-size: 12px;
+    }
+    .${ADDER.pager}[hidden] { display: none; }
 
     .${ADDER.toast} {
       position: fixed;
